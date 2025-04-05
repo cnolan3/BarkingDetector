@@ -20,7 +20,15 @@ from mediapipe.tasks.python.audio.core import audio_record
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
 from utils import getScoreByNames
-from message import msgHandler, msgBuilder
+from message import (
+    msgAttr,
+    msgCmd,
+    msgHandler,
+    msgBuilder,
+    msgRespType,
+    msgStatus,
+    msgType,
+)
 
 
 def runDetector(model: str, msgHandler: msgHandler) -> None:
@@ -110,13 +118,18 @@ class Detector:
 
             cmdMsg = self.msgHandler.recv(False)
 
-            if "msg_type" in cmdMsg and cmdMsg["msg_type"] == "cmd":
-                if cmdMsg["cmd"] == "get_result":
+            # print(cmdMsg)
+
+            if (
+                msgAttr.MSG_TYPE.value in cmdMsg
+                and cmdMsg[msgAttr.MSG_TYPE.value] == msgType.CMD.value
+            ):
+                if cmdMsg[msgAttr.CMD.value] == msgCmd.GET_RESULT.value:
                     if self.filtered_list:
                         resp = (
                             msgBuilder()
-                            .setMsgType("response")
-                            .setRespType("classification_data")
+                            .setMsgType(msgType.RESPONSE)
+                            .setRespType(msgRespType.CLASS_DATA)
                             .setData(self.filtered_list.copy())
                             .build()
                         )
@@ -124,17 +137,17 @@ class Detector:
                     else:
                         resp = (
                             msgBuilder()
-                            .setMsgType("response")
-                            .setRespType("status")
-                            .setStatus("error")
+                            .setMsgType(msgType.RESPONSE)
+                            .setRespType(msgRespType.STATUS)
+                            .setStatus(msgStatus.ERROR)
                             .build()
                         )
                         self.msgHandler.send(resp)
-                elif cmdMsg["cmd"] == "end":
+                elif cmdMsg[msgAttr.CMD.value] == msgCmd.QUIT.value:
                     resp = (
                         msgBuilder()
-                        .setMsgType("response")
-                        .setRespType("message")
+                        .setMsgType(msgType.RESPONSE)
+                        .setRespType(msgRespType.MESSAGE)
                         .setData("ended")
                         .build()
                     )

@@ -1,3 +1,4 @@
+from enum import Enum
 import multiprocessing as mp
 
 
@@ -43,34 +44,63 @@ class msgHandler:
         return self.recvPipe.poll()
 
 
+class msgAttr(Enum):
+    MSG_TYPE = "message_type"
+    RESP_TYPE = "response_type"
+    DATA = "data"
+    STATUS = "status"
+    CMD = "command"
+
+
+class msgType(Enum):
+    RESPONSE = "response"
+    CMD = "cmd"
+
+
+class msgRespType(Enum):
+    CLASS_DATA = "classification_data"
+    STATUS = "status"
+    MSG = "message"
+
+
+class msgCmd(Enum):
+    GET_RESULT = "get_result"
+    QUIT = "end"
+
+
+class msgStatus(Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+
+
 class msgBuilder(object):
     msg: {}
 
     def __init__(self):
         self.msg = {}
 
-    def setMsgType(self, msgType: str):
-        self.msg["msg_type"] = msgType
+    def setMsgType(self, msgType: msgType):
+        self.msg[msgAttr.MSG_TYPE.value] = msgType.value
         return self
 
-    def setRespType(self, respType: str):
-        self.msg["resp_type"] = respType
+    def setRespType(self, respType: msgRespType):
+        self.msg[msgAttr.RESP_TYPE.value] = respType.value
         return self
 
     def setData(self, data: str | dict):
-        self.msg["data"] = data
+        self.msg[msgAttr.DATA.value] = data
         return self
 
-    def setStatus(self, status: str):
-        self.msg["status"] = status
+    def setStatus(self, status: msgStatus):
+        self.msg[msgAttr.STATUS.value] = status.value
         return self
 
-    def setCmd(self, cmd: str):
-        self.msg["cmd"] = cmd
+    def setCmd(self, cmd: msgCmd):
+        self.msg[msgAttr.CMD.value] = cmd.value
         return self
 
     def build(self):
-        if "status" not in self.msg:
-            self.msg["status"] = "success"
+        if msgAttr.STATUS.value not in self.msg:
+            self.msg[msgAttr.STATUS.value] = msgStatus.SUCCESS.value
 
         return self.msg

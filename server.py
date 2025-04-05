@@ -2,7 +2,7 @@ import multiprocessing as mp
 
 from detector import runDetector
 from flask import Flask
-from message import msgBuilder, createMsgHandlers
+from message import msgAttr, msgBuilder, createMsgHandlers, msgCmd, msgRespType, msgType
 
 serverMsgHandler, detectorMsgHandler = createMsgHandlers()
 detectorProcess = mp.Process
@@ -13,15 +13,15 @@ app = Flask(__name__)
 @app.route("/")
 def hello_world():
     if detectorProcess.is_alive():
-        msg = msgBuilder().setMsgType("cmd").setCmd("get_result").build()
+        msg = msgBuilder().setMsgType(msgType.CMD).setCmd(msgCmd.GET_RESULT).build()
         resp = serverMsgHandler.send(msg, True, 1)
         print(resp)
         if (
-            "msg_type" in resp
-            and resp["msg_type"] == "response"
-            and resp["resp_type"] == "classification_data"
+            msgAttr.MSG_TYPE.value in resp
+            and resp[msgAttr.MSG_TYPE.value] == msgType.RESPONSE.value
+            and resp[msgAttr.RESP_TYPE.value] == msgRespType.CLASS_DATA.value
         ):
-            return resp["data"]
+            return resp[msgAttr.DATA.value]
         else:
             return "no data"
     else:

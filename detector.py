@@ -24,7 +24,7 @@ from message import (
     msgAttr,
     msgCmd,
     msgHandler,
-    msgBuilder,
+    message,
     msgRespType,
     msgStatus,
     msgType,
@@ -120,36 +120,30 @@ class Detector:
 
             # print(cmdMsg)
 
-            if (
-                msgAttr.MSG_TYPE.value in cmdMsg
-                and cmdMsg[msgAttr.MSG_TYPE.value] == msgType.CMD.value
-            ):
-                if cmdMsg[msgAttr.CMD.value] == msgCmd.GET_RESULT.value:
+            if cmdMsg.hasAttr(msgAttr.MSG_TYPE) and cmdMsg.checkMsgType(msgType.CMD):
+                if cmdMsg.checkCmd(msgCmd.GET_RESULT):
                     if self.filtered_list:
                         resp = (
-                            msgBuilder()
+                            message()
                             .setMsgType(msgType.RESPONSE)
                             .setRespType(msgRespType.CLASS_DATA)
                             .setData(self.filtered_list.copy())
-                            .build()
                         )
                         self.msgHandler.send(resp)
                     else:
                         resp = (
-                            msgBuilder()
+                            message()
                             .setMsgType(msgType.RESPONSE)
                             .setRespType(msgRespType.STATUS)
                             .setStatus(msgStatus.ERROR)
-                            .build()
                         )
                         self.msgHandler.send(resp)
                 elif cmdMsg[msgAttr.CMD.value] == msgCmd.QUIT.value:
                     resp = (
-                        msgBuilder()
+                        message()
                         .setMsgType(msgType.RESPONSE)
                         .setRespType(msgRespType.MESSAGE)
                         .setData("ended")
-                        .build()
                     )
                     self.msgHandler.send(resp)
                     break

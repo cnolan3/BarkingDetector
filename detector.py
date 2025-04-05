@@ -19,7 +19,8 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python.audio.core import audio_record
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
-from utils import getScoreByNames, msgHandler, msgBuilder
+from utils import getScoreByNames
+from message import msgHandler, msgBuilder
 
 
 def runDetector(model: str, msgHandler: msgHandler) -> None:
@@ -142,7 +143,7 @@ class Detector:
 
             # put the classification data into the pipe
             if self.filtered_list:
-                # print(classification_result_list)
+                # print(self.filtered_list)
                 self.sharedData = self.filtered_list
                 self.filtered_list.clear()
 

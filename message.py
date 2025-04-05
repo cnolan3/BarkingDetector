@@ -30,11 +30,11 @@ class msgHandler:
 
         return {}
 
-    def recv(self, wait: bool = True):
+    def recv(self, wait: bool = True, timeout: int = 0):
         if wait:
             return self.recvPipe.recv()
 
-        if self.recvPipe.poll():
+        if self.recvPipe.poll(timeout):
             return self.recvPipe.recv()
 
         return {}

@@ -13,8 +13,6 @@
 # limitations under the License.
 """A module with util functions."""
 
-import multiprocessing as mp
-
 scoreNames = ["Dog", "Bark", "Bow-wow", "Whimper (dog)"]
 
 
@@ -46,42 +44,3 @@ def scoreListToDict(scoreList):
         res[name] = scoreList[idx]
 
     return res
-
-
-def createMsgHandlers():
-    pipeARecv, pipeASend = mp.Pipe()
-    pipeBRecv, pipeBSend = mp.Pipe()
-
-    handlerA = msgHandler(pipeASend, pipeBRecv)
-    handlerB = msgHandler(pipeBSend, pipeARecv)
-
-    return handlerA, handlerB
-
-
-class msgHandler:
-    sendPipe: mp.Pipe
-    recvPipe: mp.Pipe
-
-    def __init__(self, sendPipe: mp.Pipe, recvPipe: mp.Pipe):
-        self.sendPipe = sendPipe
-        self.recvPipe = recvPipe
-
-    def send(self, msg: dict, wait: bool = True):
-        self.sendPipe.send(msg)
-
-        if wait:
-            return self.recvPipe.recv()
-
-        return {}
-
-    def recv(self, wait: bool = True):
-        if wait:
-            return self.recvPipe.recv()
-
-        if self.recvPipe.poll():
-            return self.recvPipe.recv()
-
-        return {}
-
-    def checkForMsg(self):
-        return self.recvPipe.poll()

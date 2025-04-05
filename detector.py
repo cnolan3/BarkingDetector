@@ -19,7 +19,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python.audio.core import audio_record
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
-from utils import getScoreByNames, msgHandler
+from utils import getScoreByNames, msgHandler, msgBuilder
 
 
 def runDetector(model: str, msgHandler: msgHandler) -> None:
@@ -107,22 +107,38 @@ class Detector:
                 self.filtered_list = getScoreByNames(self.classification_result_list[0])
                 self.classification_result_list.clear()
 
-            msg = self.msgHandler.recv(False)
+            cmdMsg = self.msgHandler.recv(False)
 
-            if msg == "get_result":
-                if self.filtered_list:
-                    self.msgHandler.send(
-                        {
-                            "msg_type": "response",
-                            "resp_type": "classification_data",
-                            "data": self.filtered_list.copy(),
-                        }
+            if "msg_type" in cmdMsg and cmdMsg["msg_type"] == "cmd":
+                if cmdMsg["cmd"] == "get_result":
+                    if self.filtered_list:
+                        resp = (
+                            msgBuilder()
+                            .setMsgType("response")
+                            .setRespType("classification_data")
+                            .setData(self.filtered_list.copy())
+                            .build()
+                        )
+                        self.msgHandler.send(resp)
+                    else:
+                        resp = (
+                            msgBuilder()
+                            .setMsgType("response")
+                            .setRespType("status")
+                            .setStatus("error")
+                            .build()
+                        )
+                        self.msgHandler.send(resp)
+                elif cmdMsg["cmd"] == "end":
+                    resp = (
+                        msgBuilder()
+                        .setMsgType("response")
+                        .setRespType("message")
+                        .setData("ended")
+                        .build()
                     )
-                else:
-                    self.msgHandler.send({"msg"})
-            elif msg == "end":
-                self.msgSend.put("ended")
-                break
+                    self.msgHandler.send(resp)
+                    break
 
             # put the classification data into the pipe
             if self.filtered_list:

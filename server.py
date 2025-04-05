@@ -2,9 +2,9 @@ import multiprocessing as mp
 
 from detector import runDetector
 from flask import Flask
-from utils import scoreListToDict, msgHandler, createMsgHandlers
+from message import msgBuilder, createMsgHandlers
 
-serverMsgHander, detectorMsgHander = createMsgHandlers()
+serverMsgHandler, detectorMsgHandler = createMsgHandlers()
 detectorProcess = mp.Process
 
 app = Flask(__name__)
@@ -13,8 +13,15 @@ app = Flask(__name__)
 @app.route("/")
 def hello_world():
     if detectorProcess.is_alive():
-        if shared:
-            return scoreListToDict(shared)
+        msg = msgBuilder().setMsgType("cmd").setCmd("get_result").build()
+        resp = serverMsgHandler.send(msg, True, 1)
+        print(resp)
+        if (
+            "msg_type" in resp
+            and resp["msg_type"] == "response"
+            and resp["resp_type"] == "classification_data"
+        ):
+            return resp["data"]
         else:
             return "no data"
     else:
@@ -27,12 +34,7 @@ if __name__ == "__main__":
 
     detectorProcess = mp.Process(
         target=runDetector,
-        args=(
-            "yamnet.tflite",
-            toDetector,
-            fromDetector,
-            shared,
-        ),
+        args=("yamnet.tflite", detectorMsgHandler),
         daemon=True,
     )
     detectorProcess.start()

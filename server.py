@@ -2,7 +2,14 @@ import multiprocessing as mp
 
 from detector import runDetector
 from flask import Flask
-from message import msgAttr, message, createMsgHandlers, msgCmd, msgRespType, msgType
+from message import (
+    msgAttr,
+    message,
+    createMsgHandlers,
+    msgCmd,
+    msgRespType,
+    msgType,
+)
 
 serverMsgHandler, detectorMsgHandler = createMsgHandlers()
 detectorProcess = mp.Process

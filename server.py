@@ -8,6 +8,7 @@ from message import (
     createMsgHandlers,
     msgCmd,
     msgRespType,
+    msgStatus,
     msgType,
 )
 
@@ -34,6 +35,23 @@ def hello_world():
     else:
         return "detector not started"
 
+@app.route("/quit")
+def quit_detector():
+    if detectorProcess.is_alive():
+        msg = message().setMsgType(msgType.CMD).setCmd(msgCmd.QUIT)
+        resp = serverMsgHandler.send(msg, True, 1)
+        print(resp)
+        if (
+            resp.hasAttr(msgAttr.MSG_TYPE)
+            and resp.checkMsgType(msgType.RESPONSE)
+            and resp.checkRespType(msgRespType.STATUS)
+            and resp.checkStatus(msgStatus.SUCCESS)
+        ):
+            return "detector successfully quit"
+        else:
+            return "detector quit failed"
+    else:
+        return "detector not started"
 
 if __name__ == "__main__":
     toDetector = mp.Queue()

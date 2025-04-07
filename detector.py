@@ -15,12 +15,18 @@
 
 import time
 import queue
-import wave
+
+import wavfile
+
+# import wave
 import os
 import threading
 
+from numpy import float32
+import numpy as np
+import audio_record
+
 from mediapipe.tasks import python
-from mediapipe.tasks.python.audio.core import audio_record
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
 from utils import getScoreByNames
@@ -49,13 +55,13 @@ class Detector:
     audio_format: containers.AudioDataFormat
     record: audio_record.AudioRecord
     audio_data: containers.AudioData
-    buffer_size, sample_rate, num_channels = 15600, 16000, 1
+    buffer_size, sample_rate, num_channels, sample_width = 15600, 16000, 1, 4
     listening_q_time = 3  # listening buffer length in seconds
     listening_q_size: int
     runLoop: bool
     is_recording: bool
     recording_q: queue.Queue
-    recording_timeout = 40
+    recording_timeout = 10
     record_threshold = 0.15
 
     def __init__(self, model: str, msgHandler: msgHandler):
@@ -83,6 +89,7 @@ class Detector:
         self.record = audio_record.AudioRecord(
             self.num_channels, self.sample_rate, self.buffer_size
         )
+
         self.audio_data = containers.AudioData(self.buffer_size, self.audio_format)
 
         # We'll try to run inference every interval_between_inference seconds.
@@ -104,12 +111,22 @@ class Detector:
         pause_time = self.interval_between_inference * 0.1
         last_inference_time = time.time()
         last_heard_time = 0.0
+        recording_q_lock = threading.Lock()
+        listenThread = threading.Thread(
+            target=self.recordingListen, args=(recording_q_lock,), daemon=True
+        )
+        fileWriteThread: threading.Thread
+        barking_started_at: time.time
+        barking_stopped_at: time.time
 
         # Start audio recording in the background.
         self.record.start_recording()
 
         # Loop until the user close the classification results plot.
         self.runLoop = True
+
+        listenThread.start()
+
         while self.runLoop:
             # Wait until at least interval_between_inference seconds has passed since
             # the last inference.
@@ -121,25 +138,11 @@ class Detector:
             last_inference_time = now
 
             # Load the input audio from the AudioRecord instance and run classify.
-            data = self.record.read(self.buffer_size)
-            # audio_data.load_from_array(data.astype(np.float32))
-            self.audio_data.load_from_array(data)
+            data = self.record.read_rolled_buffer(self.buffer_size)
+            self.audio_data.load_from_array(data.astype(float32))
+            # self.audio_data.load_from_array(data)
             self.classifier.classify_async(
                 self.audio_data, round(last_inference_time * 1000)
-            )
-
-            if not self.is_recording:
-                # remove old samples from the q to make room for new ones while listening
-                while not self.recording_q.empty() and (
-                    self.recording_q.qsize() + data.size > self.listening_q_size
-                ):
-                    self.recording_q.get()
-
-            for sample in data:
-                self.recording_q.put(sample)
-
-            fileWriteThread = threading.Thread(
-                target=self.saveRecording, args=(), daemon=True
             )
 
             # filter the classification result
@@ -152,8 +155,15 @@ class Detector:
                     last_heard_time = time.time()
 
                     if not self.is_recording:
-                        print("start recording")
+                        # print("start recording")
                         self.is_recording = True
+                        barking_started_at = last_heard_time
+
+                        fileWriteThread = threading.Thread(
+                            target=self.saveRecording,
+                            args=(recording_q_lock,),
+                            daemon=True,
+                        )
                         fileWriteThread.start()
 
             # check if we have heard a bark within the timeout
@@ -162,10 +172,13 @@ class Detector:
             ):
                 print("barking stopped")
                 self.is_recording = False
-                self.recording_q.put(
-                    None
-                )  # trigger the final blocking "get" in the file writing thread
-                # fileWriteThread.join()
+                barking_stopped_at = time.time()
+                print(
+                    "barking lasted for {} seconds".format(
+                        barking_stopped_at - barking_started_at
+                    )
+                )
+                fileWriteThread.join()
 
             if self.is_recording:
                 print("time since last bark: ", time.time() - last_heard_time)
@@ -177,26 +190,53 @@ class Detector:
                 # print(self.filtered_list)
                 self.filtered_list.clear()
 
+        listenThread.join()
         print("detector ended")
 
-    def saveRecording(self):
-        print("recording thread")
+    def recordingListen(self, recording_q_lock: threading.Lock):
+        while self.runLoop:
+            tmpData = self.record.read_queue()
+
+            for sample in tmpData:
+                self.recording_q.put(sample.reshape(1, self.num_channels))
+
+            if not self.is_recording:
+                recording_q_lock.acquire()
+                for i in range(
+                    max(0, self.recording_q.qsize() - self.listening_q_size)
+                ):
+                    self.recording_q.get()
+                recording_q_lock.release()
+
+    def saveRecording(self, recording_q_lock: threading.Lock):
+        # print("recording thread")
         filename = os.path.join(os.getcwd(), "{}.wav".format("test_record"))
-        maxChunkSize = self.sample_rate * 1  # 1 second of recording
-        wf = wave.open(filename, "wb")
-        wf.setnchannels(self.num_channels)
-        wf.setsampwidth(2)
-        wf.setframerate(self.sample_rate)
-        chunk = []
+        # maxChunkSize = self.sample_rate * 1  # 1 second of recording
+        # chunk = np.zeros([0, self.num_channels], dtype=np.float32)
+        wf = wavfile.open(
+            filename,
+            "wb",
+            sample_rate=self.sample_rate,
+            num_channels=self.num_channels,
+            bits_per_sample=(self.sample_width * 8),
+            fmt=wavfile.chunk.WavFormat.PCM,
+        )
         while self.is_recording:
+            recording_q_lock.acquire()
             sample = self.recording_q.get()
+            recording_q_lock.release()
 
-            if sample:
-                chunk.append(sample)
+            # print(type(sample), sample.shape, sample.dtype)
 
-            if len(chunk) >= maxChunkSize or (len(chunk) > 0 and not sample):
-                wf.writeframes(b"".join(chunk))
-                chunk.clear()
+            if sample is not None:
+                wf.write_float(sample)
+                # chunk = np.concatenate(chunk, sample)
+
+            # if np.size(chunk, 0) >= maxChunkSize or (
+            #     np.size(chunk, 0) > 0 and not sample
+            # ):
+            #     wf.write_float(chunk)
+            #     chunk = np.zeros([0, self.num_channels], dtype=np.float32)
 
         wf.close()
 

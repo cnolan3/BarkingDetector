@@ -29,7 +29,7 @@ import audio_record
 from mediapipe.tasks import python
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
-from utils import getScoreByNames
+from utils import getScoreByNames, scoreNames
 from message import (
     msgAttr,
     msgCmd,
@@ -103,30 +103,78 @@ class Detector:
 
         self.listening_q_size = self.sample_rate * self.listening_q_time
 
+        self.runLoop = True
+
     def save_result(self, result: audio.AudioClassifierResult, timestamp_ms: int):
         result.timestamp_ms = timestamp_ms
         self.classification_result_list.append(result)
 
     def run(self):
-        pause_time = self.interval_between_inference * 0.1
-        last_inference_time = time.time()
-        last_heard_time = 0.0
-        recording_q_lock = threading.Lock()
-        listenThread = threading.Thread(
-            target=self.recordingListen, args=(recording_q_lock,), daemon=True
-        )
-        fileWriteThread: threading.Thread
-        barking_started_at: time.time
-        barking_stopped_at: time.time
+        filteredListLock = threading.Lock()
+        recordingQLock = threading.Lock()
+        recordingBarrier = threading.Barrier(2)
 
         # Start audio recording in the background.
         self.record.start_recording()
 
+        detectListenThread = threading.Thread(target=self.detectorListen, args=(filteredListLock, recordingQLock, recordingBarrier, ))
+        detectListenThread.start()
+
+        recordListenThread = threading.Thread(
+            target=self.recordingListen, args=(recordingQLock, recordingBarrier, ), daemon=True
+        )
+        recordListenThread.start()
+
+        while self.runLoop:
+            cmdMsg = self.msgHandler.recv()
+
+            if cmdMsg.hasAttr(msgAttr.MSG_TYPE) and cmdMsg.checkMsgType(msgType.CMD):
+                if cmdMsg.checkCmd(msgCmd.GET_RESULT):
+                    filteredListLock.acquire()
+                    if self.filtered_list:
+                        resp = (
+                            message()
+                            .setMsgType(msgType.RESPONSE)
+                            .setRespType(msgRespType.CLASS_DATA)
+                            .setData(self.filtered_list.copy())
+                        )
+                        self.msgHandler.send(resp)
+                    else:
+                        resp = (
+                            message()
+                            .setMsgType(msgType.RESPONSE)
+                            .setRespType(msgRespType.STATUS)
+                            .setStatus(msgStatus.ERROR)
+                        )
+                        self.msgHandler.send(resp)
+                    filteredListLock.release()
+                elif cmdMsg.checkCmd(msgCmd.QUIT):
+                    self.runLoop = False
+                    resp = (
+                        message()
+                        .setMsgType(msgType.RESPONSE)
+                        .setRespType(msgRespType.STATUS)
+                        .setStatus(msgStatus.SUCCESS)
+                    )
+                    self.msgHandler.send(resp)
+
+        detectListenThread.join()
+        recordListenThread.join()
+        print("detector ended")
+
+    def detectorListen(self, filteredListLock: threading.Lock, recordingQLock: threading.Lock, recordingBarrier: threading.Barrier):
+        pause_time = self.interval_between_inference * 0.1
+        last_inference_time = time.time()
+        last_heard_time = 0.0
+        fileWriteThread: threading.Thread
+        barking_started_at: time.time
+        barking_stopped_at: time.time
+
+        # wait for recording thread to flush the recorder
+        recordingBarrier.wait()
+        recordingBarrier.wait()
+
         # Loop until the user close the classification results plot.
-        self.runLoop = True
-
-        listenThread.start()
-
         while self.runLoop:
             # Wait until at least interval_between_inference seconds has passed since
             # the last inference.
@@ -147,10 +195,13 @@ class Detector:
 
             # filter the classification result
             if self.classification_result_list:
+                filteredListLock.acquire()
+                self.filtered_list.clear()
                 self.filtered_list = getScoreByNames(self.classification_result_list[0])
+                filteredListLock.release()
                 self.classification_result_list.clear()
 
-                if self.filtered_list["Dog"] >= self.record_threshold:
+                if self.filtered_list[scoreNames[0]] >= self.record_threshold:
                     print("dog detected")
                     last_heard_time = time.time()
 
@@ -161,7 +212,7 @@ class Detector:
 
                         fileWriteThread = threading.Thread(
                             target=self.saveRecording,
-                            args=(recording_q_lock,),
+                            args=(recordingQLock,),
                             daemon=True,
                         )
                         fileWriteThread.start()
@@ -183,17 +234,13 @@ class Detector:
             if self.is_recording:
                 print("time since last bark: ", time.time() - last_heard_time)
 
-            self.handleCmd()
+    def recordingListen(self, recordingQLock: threading.Lock, recordingBarrier: threading.Barrier):
+        recordingBarrier.wait()
 
-            # put the classification data into the pipe
-            if self.filtered_list:
-                # print(self.filtered_list)
-                self.filtered_list.clear()
+        self.record.flush_queue()
 
-        listenThread.join()
-        print("detector ended")
+        recordingBarrier.wait()
 
-    def recordingListen(self, recording_q_lock: threading.Lock):
         while self.runLoop:
             tmpData = self.record.read_queue()
 
@@ -201,14 +248,12 @@ class Detector:
                 self.recording_q.put(sample.reshape(1, self.num_channels))
 
             if not self.is_recording:
-                recording_q_lock.acquire()
-                for i in range(
-                    max(0, self.recording_q.qsize() - self.listening_q_size)
-                ):
+                recordingQLock.acquire()
+                while self.recording_q.qsize() > self.listening_q_size:
                     self.recording_q.get()
-                recording_q_lock.release()
+                recordingQLock.release()
 
-    def saveRecording(self, recording_q_lock: threading.Lock):
+    def saveRecording(self, recordingQLock: threading.Lock):
         # print("recording thread")
         filename = os.path.join(os.getcwd(), "{}.wav".format("test_record"))
         # maxChunkSize = self.sample_rate * 1  # 1 second of recording
@@ -222,9 +267,9 @@ class Detector:
             fmt=wavfile.chunk.WavFormat.PCM,
         )
         while self.is_recording:
-            recording_q_lock.acquire()
+            recordingQLock.acquire()
             sample = self.recording_q.get()
-            recording_q_lock.release()
+            recordingQLock.release()
 
             # print(type(sample), sample.shape, sample.dtype)
 
@@ -239,34 +284,3 @@ class Detector:
             #     chunk = np.zeros([0, self.num_channels], dtype=np.float32)
 
         wf.close()
-
-    def handleCmd(self):
-        cmdMsg = self.msgHandler.recv(False)
-
-        if cmdMsg.hasAttr(msgAttr.MSG_TYPE) and cmdMsg.checkMsgType(msgType.CMD):
-            if cmdMsg.checkCmd(msgCmd.GET_RESULT):
-                if self.filtered_list:
-                    resp = (
-                        message()
-                        .setMsgType(msgType.RESPONSE)
-                        .setRespType(msgRespType.CLASS_DATA)
-                        .setData(self.filtered_list.copy())
-                    )
-                    self.msgHandler.send(resp)
-                else:
-                    resp = (
-                        message()
-                        .setMsgType(msgType.RESPONSE)
-                        .setRespType(msgRespType.STATUS)
-                        .setStatus(msgStatus.ERROR)
-                    )
-                    self.msgHandler.send(resp)
-            elif cmdMsg.checkCmd(msgCmd.QUIT):
-                self.runLoop = False
-                resp = (
-                    message()
-                    .setMsgType(msgType.RESPONSE)
-                    .setRespType(msgRespType.STATUS)
-                    .setStatus(msgStatus.SUCCESS)
-                )
-                self.msgHandler.send(resp)

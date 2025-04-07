@@ -132,3 +132,9 @@ class AudioRecord(object):
 
     def read_queue(self) -> np.ndarray:
         return self._audio_queue.get()
+
+    def flush_queue(self) -> None:
+        self._lock.acquire()
+        while not self._audio_queue.empty():
+            self._audio_queue.get()
+        self._lock.release()

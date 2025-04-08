@@ -23,31 +23,31 @@ import os
 import threading
 
 from numpy import float32
-import numpy as np
 import audio_record
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
-from utils import getScoreByNames, scoreNames
+from utils import getScoreByNames, scoreNames, checkSettingsFile, readSettings, Settings
 from message import (
-    msgAttr,
-    msgCmd,
-    msgHandler,
-    message,
-    msgRespType,
-    msgStatus,
-    msgType,
+    MsgAttr,
+    MsgCmd,
+    MsgHandler,
+    Message,
+    MsgRespType,
+    MsgStatus,
+    MsgType,
 )
 
 
-def runDetector(model: str, msgHandler: msgHandler) -> None:
+def runDetector(model: str, msgHandler: MsgHandler) -> None:
+    checkSettingsFile()
     detector = Detector(model, msgHandler)
     detector.run()
 
 
 class Detector:
-    msgHandler: msgHandler
+    msgHandler: MsgHandler
     classification_result_list = []
     filtered_list = {}
     classifier: audio.AudioClassifier
@@ -63,11 +63,15 @@ class Detector:
     recording_q: queue.Queue
     recording_timeout = 10
     record_threshold = 0.15
+    barking_stopped_at: time.time
+    is_writing: bool
 
-    def __init__(self, model: str, msgHandler: msgHandler):
+    def __init__(self, model: str, msgHandler: MsgHandler):
+        self.loadSettings()
         self.msgHandler = msgHandler
         self.recording_q = queue.Queue()
         self.is_recording = False
+        self.is_writing = False
 
         # Initialize the audio classification model.
         base_options = python.BaseOptions(model_asset_path=model)
@@ -109,6 +113,17 @@ class Detector:
         result.timestamp_ms = timestamp_ms
         self.classification_result_list.append(result)
 
+    def loadSettings(self):
+        settings = readSettings()
+
+        if settings:
+            self.record_threshold = settings[Settings.BARK_THRESHOLD.value]
+            self.recording_timeout = settings[Settings.REC_TIMEOUT.value]
+            self.listening_q_time = settings[Settings.PRE_BUFFER_TIME.value]
+            self.buffer_size = settings[Settings.REC_BUFFER_SIZE.value]
+            self.sample_rate = settings[Settings.SAMPLE_RATE.value]
+            self.num_channels = settings[Settings.NUM_CHANNELS.value]
+
     def run(self):
         filteredListLock = threading.Lock()
         recordingQLock = threading.Lock()
@@ -117,44 +132,59 @@ class Detector:
         # Start audio recording in the background.
         self.record.start_recording()
 
-        detectListenThread = threading.Thread(target=self.detectorListen, args=(filteredListLock, recordingQLock, recordingBarrier, ))
+        detectListenThread = threading.Thread(
+            target=self.detectorListen,
+            args=(
+                filteredListLock,
+                recordingQLock,
+                recordingBarrier,
+            ),
+            daemon=True,
+        )
         detectListenThread.start()
 
         recordListenThread = threading.Thread(
-            target=self.recordingListen, args=(recordingQLock, recordingBarrier, ), daemon=True
+            target=self.recordingListen,
+            args=(
+                recordingQLock,
+                recordingBarrier,
+            ),
+            daemon=True,
         )
         recordListenThread.start()
 
         while self.runLoop:
             cmdMsg = self.msgHandler.recv()
 
-            if cmdMsg.hasAttr(msgAttr.MSG_TYPE) and cmdMsg.checkMsgType(msgType.CMD):
-                if cmdMsg.checkCmd(msgCmd.GET_RESULT):
+            if cmdMsg.hasAttr(MsgAttr.MSG_TYPE) and cmdMsg.checkMsgType(MsgType.CMD):
+                if cmdMsg.checkCmd(MsgCmd.GET_RESULT):
                     filteredListLock.acquire()
                     if self.filtered_list:
                         resp = (
-                            message()
-                            .setMsgType(msgType.RESPONSE)
-                            .setRespType(msgRespType.CLASS_DATA)
+                            Message()
+                            .setMsgType(MsgType.RESPONSE)
+                            .setRespType(MsgRespType.CLASS_DATA)
                             .setData(self.filtered_list.copy())
                         )
                         self.msgHandler.send(resp)
                     else:
                         resp = (
-                            message()
-                            .setMsgType(msgType.RESPONSE)
-                            .setRespType(msgRespType.STATUS)
-                            .setStatus(msgStatus.ERROR)
+                            Message()
+                            .setMsgType(MsgType.RESPONSE)
+                            .setRespType(MsgRespType.STATUS)
+                            .setStatus(MsgStatus.ERROR)
                         )
                         self.msgHandler.send(resp)
                     filteredListLock.release()
-                elif cmdMsg.checkCmd(msgCmd.QUIT):
+                elif cmdMsg.checkCmd(MsgCmd.UPDATE_SETTING):
+                    continue  # TODO
+                elif cmdMsg.checkCmd(MsgCmd.QUIT):
                     self.runLoop = False
                     resp = (
-                        message()
-                        .setMsgType(msgType.RESPONSE)
-                        .setRespType(msgRespType.STATUS)
-                        .setStatus(msgStatus.SUCCESS)
+                        Message()
+                        .setMsgType(MsgType.RESPONSE)
+                        .setRespType(MsgRespType.STATUS)
+                        .setStatus(MsgStatus.SUCCESS)
                     )
                     self.msgHandler.send(resp)
 
@@ -162,13 +192,18 @@ class Detector:
         recordListenThread.join()
         print("detector ended")
 
-    def detectorListen(self, filteredListLock: threading.Lock, recordingQLock: threading.Lock, recordingBarrier: threading.Barrier):
+    def detectorListen(
+        self,
+        filteredListLock: threading.Lock,
+        recordingQLock: threading.Lock,
+        recordingBarrier: threading.Barrier,
+    ):
         pause_time = self.interval_between_inference * 0.1
         last_inference_time = time.time()
         last_heard_time = 0.0
         fileWriteThread: threading.Thread
         barking_started_at: time.time
-        barking_stopped_at: time.time
+        self.barking_stopped_at: time.time
 
         # wait for recording thread to flush the recorder
         recordingBarrier.wait()
@@ -222,35 +257,39 @@ class Detector:
                 time.time() - last_heard_time > self.recording_timeout
             ):
                 print("barking stopped")
-                self.is_recording = False
-                barking_stopped_at = time.time()
+                self.barking_stopped_at = time.time()
                 print(
                     "barking lasted for {} seconds".format(
-                        barking_stopped_at - barking_started_at
+                        self.barking_stopped_at - barking_started_at
                     )
                 )
+                self.is_recording = False
                 fileWriteThread.join()
 
             if self.is_recording:
                 print("time since last bark: ", time.time() - last_heard_time)
 
-    def recordingListen(self, recordingQLock: threading.Lock, recordingBarrier: threading.Barrier):
+    def recordingListen(
+        self, recordingQLock: threading.Lock, recordingBarrier: threading.Barrier
+    ):
         recordingBarrier.wait()
 
         self.record.flush_queue()
 
         recordingBarrier.wait()
 
+        bufferSum = 0
         while self.runLoop:
-            tmpData = self.record.read_queue()
+            data = self.record.read_queue()
 
-            for sample in tmpData:
-                self.recording_q.put(sample.reshape(1, self.num_channels))
+            self.recording_q.put((data, time.time()))
+            bufferSum += data.shape[0]
 
-            if not self.is_recording:
+            if not self.is_recording and not self.is_writing:
                 recordingQLock.acquire()
-                while self.recording_q.qsize() > self.listening_q_size:
-                    self.recording_q.get()
+                while bufferSum > self.listening_q_size:
+                    tmp = self.recording_q.get()[0]
+                    bufferSum -= tmp.shape[0]
                 recordingQLock.release()
 
     def saveRecording(self, recordingQLock: threading.Lock):
@@ -266,15 +305,22 @@ class Detector:
             bits_per_sample=(self.sample_width * 8),
             fmt=wavfile.chunk.WavFormat.PCM,
         )
-        while self.is_recording:
+        firstTimestamp = None
+        latestTimestamp = time.time()
+        sampleCount = 0
+        self.is_writing = True
+        while self.is_recording or latestTimestamp < self.barking_stopped_at:
             recordingQLock.acquire()
-            sample = self.recording_q.get()
+            (sample, latestTimestamp) = self.recording_q.get()
             recordingQLock.release()
 
             # print(type(sample), sample.shape, sample.dtype)
 
             if sample is not None:
                 wf.write_float(sample)
+                sampleCount += sample.shape[0]
+                if firstTimestamp is None:
+                    firstTimestamp = latestTimestamp
                 # chunk = np.concatenate(chunk, sample)
 
             # if np.size(chunk, 0) >= maxChunkSize or (
@@ -282,5 +328,17 @@ class Detector:
             # ):
             #     wf.write_float(chunk)
             #     chunk = np.zeros([0, self.num_channels], dtype=np.float32)
+            if not self.is_recording and latestTimestamp < self.barking_stopped_at:
+                print(
+                    "still recording... difference: ",
+                    self.barking_stopped_at - latestTimestamp,
+                )
 
         wf.close()
+        self.is_writing = False
+        print("duration: ", latestTimestamp - firstTimestamp)
+        print("number of samples: ", sampleCount)
+        print("duration by samples: ", sampleCount / self.sample_rate)
+        print("first timestamp: ", firstTimestamp)
+        print("last timestamp: ", latestTimestamp)
+        print("barking stopped at: ", self.barking_stopped_at)

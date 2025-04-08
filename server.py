@@ -3,13 +3,13 @@ import multiprocessing as mp
 from detector import runDetector
 from flask import Flask
 from message import (
-    msgAttr,
-    message,
+    MsgAttr,
+    Message,
     createMsgHandlers,
-    msgCmd,
-    msgRespType,
-    msgStatus,
-    msgType,
+    MsgCmd,
+    MsgRespType,
+    MsgStatus,
+    MsgType,
 )
 
 serverMsgHandler, detectorMsgHandler = createMsgHandlers()
@@ -21,13 +21,13 @@ app = Flask(__name__)
 @app.route("/")
 def hello_world():
     if detectorProcess.is_alive():
-        msg = message().setMsgType(msgType.CMD).setCmd(msgCmd.GET_RESULT)
+        msg = Message().setMsgType(MsgType.CMD).setCmd(MsgCmd.GET_RESULT)
         resp = serverMsgHandler.send(msg, True, 1)
         print(resp)
         if (
-            resp.hasAttr(msgAttr.MSG_TYPE)
-            and resp.checkMsgType(msgType.RESPONSE)
-            and resp.checkRespType(msgRespType.CLASS_DATA)
+            resp.hasAttr(MsgAttr.MSG_TYPE)
+            and resp.checkMsgType(MsgType.RESPONSE)
+            and resp.checkRespType(MsgRespType.CLASS_DATA)
         ):
             return resp.getData()
         else:
@@ -35,23 +35,25 @@ def hello_world():
     else:
         return "detector not started"
 
+
 @app.route("/quit")
 def quit_detector():
     if detectorProcess.is_alive():
-        msg = message().setMsgType(msgType.CMD).setCmd(msgCmd.QUIT)
+        msg = Message().setMsgType(MsgType.CMD).setCmd(MsgCmd.QUIT)
         resp = serverMsgHandler.send(msg, True, 1)
         print(resp)
         if (
-            resp.hasAttr(msgAttr.MSG_TYPE)
-            and resp.checkMsgType(msgType.RESPONSE)
-            and resp.checkRespType(msgRespType.STATUS)
-            and resp.checkStatus(msgStatus.SUCCESS)
+            resp.hasAttr(MsgAttr.MSG_TYPE)
+            and resp.checkMsgType(MsgType.RESPONSE)
+            and resp.checkRespType(MsgRespType.STATUS)
+            and resp.checkStatus(MsgStatus.SUCCESS)
         ):
             return "detector successfully quit"
         else:
             return "detector quit failed"
     else:
         return "detector not started"
+
 
 if __name__ == "__main__":
     toDetector = mp.Queue()

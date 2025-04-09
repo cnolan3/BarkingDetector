@@ -1,10 +1,14 @@
 """Main scripts to run audio classification."""
 
+import datetime
+from math import nextafter
 import time
 import queue
 
 import os
 import threading
+import sqlite3
+import db
 
 from numpy import float32
 import audio_record
@@ -60,6 +64,7 @@ class Detector:
     is_writing: bool
     write_buffer_length = 3
     file_write_path = ""
+    bufferSum: int
 
     def __init__(self, model: str, msgHandler: MsgHandler):
         self.loadSettings()
@@ -68,6 +73,12 @@ class Detector:
         self.barking_stopped_at_q = queue.Queue()
         self.is_recording = False
         self.is_writing = False
+        self.bufferSum = 0
+
+        # create tables in db if not already
+        db_conn = sqlite3.connect(db.dbname)
+        db.createTables(db_conn)
+        db_conn.close()
 
         # Initialize the audio classification model.
         base_options = python.BaseOptions(model_asset_path=model)
@@ -124,11 +135,20 @@ class Detector:
             self.sample_rate = settings[Settings.SAMPLE_RATE.value]
             self.num_channels = settings[Settings.NUM_CHANNELS.value]
             self.write_buffer_length = settings[Settings.WRITE_BUFFER_LENGTH.value]
+            self.file_write_path = settings[Settings.RECORDING_FILE_PATH.value]
+
+        if self.file_write_path != "" and not Path(self.file_write_path).is_dir():
+            # TODO raise an exception or something
+            print(
+                "{} is not a valid path, resorting to default".format(
+                    self.file_write_path
+                )
+            )
+            self.file_write_path = ""
 
         if self.file_write_path == "":
             self.file_write_path = os.path.join(os.getcwd(), "recordings/")
-
-        Path(self.file_write_path).mkdir(parents=True, exist_ok=True)
+            Path(self.file_write_path).mkdir(parents=True, exist_ok=True)
 
     def run(self):
         filteredListLock = threading.Lock()
@@ -273,8 +293,8 @@ class Detector:
                 self.is_recording = False
                 fileWriteThread.join()
 
-            if self.is_recording:
-                print("time since last bark: ", time.time() - last_heard_time)
+            # if self.is_recording:
+            #     print("time since last bark: ", time.time() - last_heard_time)
 
     def recordingListen(
         self, recordingQLock: threading.Lock, recordingBarrier: threading.Barrier
@@ -285,32 +305,38 @@ class Detector:
 
         recordingBarrier.wait()
 
-        bufferSum = 0
+        self.bufferSum = 0
         while self.runLoop:
             data = self.record.read_queue()
 
             self.recording_q.put(data)
-            bufferSum += data[0].shape[0]
+            self.bufferSum += data[0].shape[0]
 
             if not self.is_recording and not self.is_writing:
                 recordingQLock.acquire()
-                while bufferSum > self.listening_q_size:
+                while self.bufferSum > self.listening_q_size:
                     tmp = self.recording_q.get()[0]
-                    bufferSum -= tmp.shape[0]
+                    self.bufferSum -= tmp.shape[0]
                 recordingQLock.release()
 
     def saveRecording(self, recordingQLock: threading.Lock):
-        filename = os.path.join(self.file_write_path, "{}.wav".format("test_record"))
-        maxChunkSize = self.sample_rate * self.write_buffer_length
-        curChunkSize = 0
+        db_conn = sqlite3.connect(db.dbname)
+        now = datetime.datetime.now()
+        nextDayId = db.getNextDayId(db_conn)
+        filename = f"{now.strftime('%b-%d-%Y_%I:%M%p')}_#{nextDayId}"
+        filepath = os.path.join(self.file_write_path, f"{filename}.wav")
         sf = SoundFile(
-            filename,
+            filepath,
             "w",
             samplerate=self.sample_rate,
             channels=self.num_channels,
             subtype="PCM_16",
             format="WAV",
         )
+
+        maxChunkSize = self.sample_rate * self.write_buffer_length
+        curChunkSize = 0
+
         firstTimestamp = None
         latestTimestamp = time.time()
         totalSampleCount = 0
@@ -318,16 +344,24 @@ class Detector:
 
         self.is_writing = True
 
+        print("############# start writing")
         while latestTimestamp < barking_stopped_at:
+            print("############# ---- ", latestTimestamp, " ---- ", barking_stopped_at)
             if (
                 barking_stopped_at == maxTimestamp
                 and not self.barking_stopped_at_q.empty()
             ):
                 barking_stopped_at = self.barking_stopped_at_q.get()
 
+            print("############# ---- rec q lock acquire")
             recordingQLock.acquire()
+            print("############# ---- rec q lock get")
             (sample, latestTimestamp) = self.recording_q.get()
+            self.bufferSum -= sample.shape[0]
+            print("############# ---- rec q lock get complete")
             recordingQLock.release()
+
+            print("############# ---- rec q lock release")
 
             if sample is not None:
                 sf.write(sample)
@@ -350,8 +384,18 @@ class Detector:
             #         barking_stopped_at - latestTimestamp,
             #     )
 
+        print("############# closing file")
         sf.close()
         self.is_writing = False
+
+        print("############# inserting into db")
+        db.insertRecording(
+            db_conn, filename, now, latestTimestamp - firstTimestamp, nextDayId
+        )
+
+        print("############# insert done")
+        db_conn.close()
+        print("############# db conn closed")
 
         # print("duration: ", latestTimestamp - firstTimestamp)
         # print("number of samples: ", totalSampleCount)

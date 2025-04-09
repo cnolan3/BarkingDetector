@@ -2,6 +2,7 @@
 .direnv/
 __pycache__/
 recordings/
+recordings.db
 *.tflite
 *.wav
 settings.yaml

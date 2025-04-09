@@ -3,11 +3,17 @@
 from enum import Enum
 from pathlib import Path
 import os
-import time
+import datetime
 import yaml
 
 
-maxTimestamp = time.mktime(time.strptime("01 Jan 3000", "%d %b %Y"))
+maxTimestamp = datetime.datetime(3000, 1, 1).timestamp()
+
+
+def getTodaysFirstTimestamp():
+    now = datetime.datetime.now()
+    today = datetime.datetime(now.year, now.month, now.day)
+    return today.timestamp()
 
 
 class Settings(Enum):

@@ -9,6 +9,7 @@ import threading
 from numpy import float32
 import audio_record
 
+from pathlib import Path
 from soundfile import SoundFile
 from mediapipe.tasks import python
 from mediapipe.tasks.python.components import containers
@@ -58,6 +59,7 @@ class Detector:
     barking_stopped_at_q: queue.Queue
     is_writing: bool
     write_buffer_length = 3
+    file_write_path = ""
 
     def __init__(self, model: str, msgHandler: MsgHandler):
         self.loadSettings()
@@ -122,6 +124,11 @@ class Detector:
             self.sample_rate = settings[Settings.SAMPLE_RATE.value]
             self.num_channels = settings[Settings.NUM_CHANNELS.value]
             self.write_buffer_length = settings[Settings.WRITE_BUFFER_LENGTH.value]
+
+        if self.file_write_path == "":
+            self.file_write_path = os.path.join(os.getcwd(), "recordings/")
+
+        Path(self.file_write_path).mkdir(parents=True, exist_ok=True)
 
     def run(self):
         filteredListLock = threading.Lock()
@@ -293,9 +300,7 @@ class Detector:
                 recordingQLock.release()
 
     def saveRecording(self, recordingQLock: threading.Lock):
-        # print("recording thread")
-
-        filename = os.path.join(os.getcwd(), "{}.wav".format("test_record"))
+        filename = os.path.join(self.file_write_path, "{}.wav".format("test_record"))
         maxChunkSize = self.sample_rate * self.write_buffer_length
         curChunkSize = 0
         sf = SoundFile(
@@ -310,7 +315,6 @@ class Detector:
         latestTimestamp = time.time()
         totalSampleCount = 0
         barking_stopped_at = maxTimestamp
-        print("stopped: ", barking_stopped_at, "    latest: ", latestTimestamp)
 
         self.is_writing = True
 
@@ -349,9 +353,9 @@ class Detector:
         sf.close()
         self.is_writing = False
 
-        print("duration: ", latestTimestamp - firstTimestamp)
-        print("number of samples: ", totalSampleCount)
-        print("duration by samples: ", totalSampleCount / self.sample_rate)
-        print("first timestamp: ", firstTimestamp)
-        print("last timestamp: ", latestTimestamp)
-        print("barking stopped at: ", barking_stopped_at)
+        # print("duration: ", latestTimestamp - firstTimestamp)
+        # print("number of samples: ", totalSampleCount)
+        # print("duration by samples: ", totalSampleCount / self.sample_rate)
+        # print("first timestamp: ", firstTimestamp)
+        # print("last timestamp: ", latestTimestamp)
+        # print("barking stopped at: ", barking_stopped_at)

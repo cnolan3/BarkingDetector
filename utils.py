@@ -18,6 +18,7 @@ class Settings(Enum):
     SAMPLE_RATE = "sample_rate"
     NUM_CHANNELS = "num_channels"
     WRITE_BUFFER_LENGTH = "write_buffer_length"
+    RECORDING_FILE_PATH = "recording_file_path"
 
 
 settingsPath = os.path.join(os.getcwd(), "settings.yaml")
@@ -29,6 +30,7 @@ defaultSettings = {
     Settings.SAMPLE_RATE.value: 160000,  # sample rate of audio (shouldn't need to edit this)
     Settings.NUM_CHANNELS.value: 1,  # number of audio channels to use (shouldn't need to edit this)
     Settings.WRITE_BUFFER_LENGTH.value: 3,  # number of seconds (in samples) between file flush() calls (shouldn't need to edit this)
+    Settings.RECORDING_FILE_PATH.value: "",  # path to save recordings to
 }
 
 

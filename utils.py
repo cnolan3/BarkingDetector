@@ -1,22 +1,13 @@
-# Copyright 2023 The MediaPipe Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """A module with util functions."""
 
 from enum import Enum
 from pathlib import Path
 import os
+import time
 import yaml
+
+
+maxTimestamp = time.mktime(time.strptime("01 Jan 3000", "%d %b %Y"))
 
 
 class Settings(Enum):
@@ -26,6 +17,7 @@ class Settings(Enum):
     REC_BUFFER_SIZE = "recorder_buffer_size"
     SAMPLE_RATE = "sample_rate"
     NUM_CHANNELS = "num_channels"
+    WRITE_BUFFER_LENGTH = "write_buffer_length"
 
 
 settingsPath = os.path.join(os.getcwd(), "settings.yaml")
@@ -36,6 +28,7 @@ defaultSettings = {
     Settings.REC_BUFFER_SIZE.value: 15600,  # size of internal audio recording buffer (shouldn't need to edit this)
     Settings.SAMPLE_RATE.value: 160000,  # sample rate of audio (shouldn't need to edit this)
     Settings.NUM_CHANNELS.value: 1,  # number of audio channels to use (shouldn't need to edit this)
+    Settings.WRITE_BUFFER_LENGTH.value: 3,  # number of seconds (in samples) between file flush() calls (shouldn't need to edit this)
 }
 
 
@@ -47,12 +40,13 @@ def checkSettingsFile():
 
 
 def readSettings():
+    data = {}
     settingsFile = Path(settingsPath)
     if settingsFile.is_file():
         with settingsFile.open("r") as f:
-            return yaml.safe_load(f)
+            data = yaml.safe_load(f)
 
-    return {}
+    return data
 
 
 def updateSetting(id: Settings, val):

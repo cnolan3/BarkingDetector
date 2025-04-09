@@ -15,6 +15,7 @@
 
 import queue
 import threading
+import time
 import numpy as np
 
 try:
@@ -61,11 +62,13 @@ class AudioRecord(object):
 
         # Create a ring buffer to store the input audio.
         self._buffer = np.zeros([buffer_size, channels], dtype=np.float32)
+        self._cur_data = (np.ndarray([buffer_size, channels], dtype=np.float32), 0.0)
         self._lock = threading.Lock()
 
         def audio_callback(data, *_):
             """A callback to receive recorded audio data from sounddevice."""
             self._lock.acquire()
+            timestamp = time.time()
             shift = len(data)
             if shift > buffer_size:
                 self._buffer = np.copy(data[:buffer_size])
@@ -73,7 +76,9 @@ class AudioRecord(object):
                 self._buffer = np.roll(self._buffer, -shift, axis=0)
                 self._buffer[-shift:, :] = np.copy(data)
 
-            self._audio_queue.put(data.copy())
+            self._cur_data = (self._buffer, timestamp)
+
+            self._audio_queue.put((data.copy(), timestamp))
             self._lock.release()
 
         # Create an input stream to continuously capture the audio data.
@@ -125,7 +130,7 @@ class AudioRecord(object):
             raise ValueError("Size must be positive.")
 
         start_index = self._buffer_size - size
-        return np.copy(self._buffer[start_index:])
+        return (np.copy(self._cur_data[0][start_index:]), self._cur_data[1])
 
     def queue_size(self):
         return self._audio_queue.qsize()

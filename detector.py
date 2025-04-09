@@ -1,34 +1,26 @@
-# Copyright 2023 The MediaPipe Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 """Main scripts to run audio classification."""
 
 import time
 import queue
 
-import wavfile
-
-# import wave
 import os
 import threading
 
 from numpy import float32
 import audio_record
 
+from soundfile import SoundFile
 from mediapipe.tasks import python
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
-from utils import getScoreByNames, scoreNames, checkSettingsFile, readSettings, Settings
+from utils import (
+    getScoreByNames,
+    scoreNames,
+    checkSettingsFile,
+    readSettings,
+    Settings,
+    maxTimestamp,
+)
 from message import (
     MsgAttr,
     MsgCmd,
@@ -63,13 +55,15 @@ class Detector:
     recording_q: queue.Queue
     recording_timeout = 10
     record_threshold = 0.15
-    barking_stopped_at: time.time
+    barking_stopped_at_q: queue.Queue
     is_writing: bool
+    write_buffer_length = 3
 
     def __init__(self, model: str, msgHandler: MsgHandler):
         self.loadSettings()
         self.msgHandler = msgHandler
         self.recording_q = queue.Queue()
+        self.barking_stopped_at_q = queue.Queue()
         self.is_recording = False
         self.is_writing = False
 
@@ -117,12 +111,17 @@ class Detector:
         settings = readSettings()
 
         if settings:
+            for attr in Settings:
+                if attr.value not in settings:
+                    return  # settings file not valid
+
             self.record_threshold = settings[Settings.BARK_THRESHOLD.value]
             self.recording_timeout = settings[Settings.REC_TIMEOUT.value]
             self.listening_q_time = settings[Settings.PRE_BUFFER_TIME.value]
             self.buffer_size = settings[Settings.REC_BUFFER_SIZE.value]
             self.sample_rate = settings[Settings.SAMPLE_RATE.value]
             self.num_channels = settings[Settings.NUM_CHANNELS.value]
+            self.write_buffer_length = settings[Settings.WRITE_BUFFER_LENGTH.value]
 
     def run(self):
         filteredListLock = threading.Lock()
@@ -202,8 +201,8 @@ class Detector:
         last_inference_time = time.time()
         last_heard_time = 0.0
         fileWriteThread: threading.Thread
-        barking_started_at: time.time
-        self.barking_stopped_at: time.time
+        barking_started_at: int
+        barking_stopped_at: int
 
         # wait for recording thread to flush the recorder
         recordingBarrier.wait()
@@ -221,7 +220,7 @@ class Detector:
             last_inference_time = now
 
             # Load the input audio from the AudioRecord instance and run classify.
-            data = self.record.read_rolled_buffer(self.buffer_size)
+            (data, timestamp) = self.record.read_rolled_buffer(self.buffer_size)
             self.audio_data.load_from_array(data.astype(float32))
             # self.audio_data.load_from_array(data)
             self.classifier.classify_async(
@@ -238,7 +237,7 @@ class Detector:
 
                 if self.filtered_list[scoreNames[0]] >= self.record_threshold:
                     print("dog detected")
-                    last_heard_time = time.time()
+                    last_heard_time = timestamp
 
                     if not self.is_recording:
                         # print("start recording")
@@ -257,10 +256,11 @@ class Detector:
                 time.time() - last_heard_time > self.recording_timeout
             ):
                 print("barking stopped")
-                self.barking_stopped_at = time.time()
+                barking_stopped_at = timestamp
+                self.barking_stopped_at_q.put(barking_stopped_at)
                 print(
                     "barking lasted for {} seconds".format(
-                        self.barking_stopped_at - barking_started_at
+                        barking_stopped_at - barking_started_at
                     )
                 )
                 self.is_recording = False
@@ -282,8 +282,8 @@ class Detector:
         while self.runLoop:
             data = self.record.read_queue()
 
-            self.recording_q.put((data, time.time()))
-            bufferSum += data.shape[0]
+            self.recording_q.put(data)
+            bufferSum += data[0].shape[0]
 
             if not self.is_recording and not self.is_writing:
                 recordingQLock.acquire()
@@ -294,51 +294,64 @@ class Detector:
 
     def saveRecording(self, recordingQLock: threading.Lock):
         # print("recording thread")
+
         filename = os.path.join(os.getcwd(), "{}.wav".format("test_record"))
-        # maxChunkSize = self.sample_rate * 1  # 1 second of recording
-        # chunk = np.zeros([0, self.num_channels], dtype=np.float32)
-        wf = wavfile.open(
+        maxChunkSize = self.sample_rate * self.write_buffer_length
+        curChunkSize = 0
+        sf = SoundFile(
             filename,
-            "wb",
-            sample_rate=self.sample_rate,
-            num_channels=self.num_channels,
-            bits_per_sample=(self.sample_width * 8),
-            fmt=wavfile.chunk.WavFormat.PCM,
+            "w",
+            samplerate=self.sample_rate,
+            channels=self.num_channels,
+            subtype="PCM_16",
+            format="WAV",
         )
         firstTimestamp = None
         latestTimestamp = time.time()
-        sampleCount = 0
+        totalSampleCount = 0
+        barking_stopped_at = maxTimestamp
+        print("stopped: ", barking_stopped_at, "    latest: ", latestTimestamp)
+
         self.is_writing = True
-        while self.is_recording or latestTimestamp < self.barking_stopped_at:
+
+        while latestTimestamp < barking_stopped_at:
+            if (
+                barking_stopped_at == maxTimestamp
+                and not self.barking_stopped_at_q.empty()
+            ):
+                barking_stopped_at = self.barking_stopped_at_q.get()
+
             recordingQLock.acquire()
             (sample, latestTimestamp) = self.recording_q.get()
             recordingQLock.release()
 
-            # print(type(sample), sample.shape, sample.dtype)
-
             if sample is not None:
-                wf.write_float(sample)
-                sampleCount += sample.shape[0]
+                sf.write(sample)
+                curChunkSize += sample.shape[0]
+                totalSampleCount += sample.shape[0]
                 if firstTimestamp is None:
                     firstTimestamp = latestTimestamp
-                # chunk = np.concatenate(chunk, sample)
 
-            # if np.size(chunk, 0) >= maxChunkSize or (
-            #     np.size(chunk, 0) > 0 and not sample
+            if curChunkSize >= maxChunkSize:
+                sf.flush()
+                curChunkSize = 0
+
+            # if (
+            #     not self.is_recording
+            #     and barking_stopped_at is not maxTimestamp
+            #     and latestTimestamp < barking_stopped_at
             # ):
-            #     wf.write_float(chunk)
-            #     chunk = np.zeros([0, self.num_channels], dtype=np.float32)
-            if not self.is_recording and latestTimestamp < self.barking_stopped_at:
-                print(
-                    "still recording... difference: ",
-                    self.barking_stopped_at - latestTimestamp,
-                )
+            #     print(
+            #         "still recording... difference: ",
+            #         barking_stopped_at - latestTimestamp,
+            #     )
 
-        wf.close()
+        sf.close()
         self.is_writing = False
+
         print("duration: ", latestTimestamp - firstTimestamp)
-        print("number of samples: ", sampleCount)
-        print("duration by samples: ", sampleCount / self.sample_rate)
+        print("number of samples: ", totalSampleCount)
+        print("duration by samples: ", totalSampleCount / self.sample_rate)
         print("first timestamp: ", firstTimestamp)
         print("last timestamp: ", latestTimestamp)
-        print("barking stopped at: ", self.barking_stopped_at)
+        print("barking stopped at: ", barking_stopped_at)

@@ -1,7 +1,6 @@
 """Main scripts to run audio classification."""
 
 import datetime
-from math import nextafter
 import time
 import queue
 
@@ -264,7 +263,11 @@ class Detector:
 
                 if self.filtered_list[scoreNames[0]] >= self.record_threshold:
                     print("dog detected")
-                    last_heard_time = timestamp
+                    insertBarkThread = threading.Thread(
+                        target=self.dbInsertBark, args=(timestamp,), daemon=True
+                    )
+                    insertBarkThread.start()
+                    last_heard_time = timestamp.timestamp()
 
                     if not self.is_recording:
                         # print("start recording")
@@ -283,7 +286,7 @@ class Detector:
                 time.time() - last_heard_time > self.recording_timeout
             ):
                 print("barking stopped")
-                barking_stopped_at = timestamp
+                barking_stopped_at = timestamp.timestamp()
                 self.barking_stopped_at_q.put(barking_stopped_at)
                 print(
                     "barking lasted for {} seconds".format(
@@ -341,27 +344,24 @@ class Detector:
         latestTimestamp = time.time()
         totalSampleCount = 0
         barking_stopped_at = maxTimestamp
+        tsobj: datetime.datetime = None
 
         self.is_writing = True
 
-        print("############# start writing")
         while latestTimestamp < barking_stopped_at:
-            print("############# ---- ", latestTimestamp, " ---- ", barking_stopped_at)
             if (
                 barking_stopped_at == maxTimestamp
                 and not self.barking_stopped_at_q.empty()
             ):
                 barking_stopped_at = self.barking_stopped_at_q.get()
 
-            print("############# ---- rec q lock acquire")
             recordingQLock.acquire()
-            print("############# ---- rec q lock get")
-            (sample, latestTimestamp) = self.recording_q.get()
-            self.bufferSum -= sample.shape[0]
-            print("############# ---- rec q lock get complete")
-            recordingQLock.release()
 
-            print("############# ---- rec q lock release")
+            (sample, tsobj) = self.recording_q.get()
+            latestTimestamp = tsobj.timestamp()
+            self.bufferSum -= sample.shape[0]
+
+            recordingQLock.release()
 
             if sample is not None:
                 sf.write(sample)
@@ -384,18 +384,14 @@ class Detector:
             #         barking_stopped_at - latestTimestamp,
             #     )
 
-        print("############# closing file")
         sf.close()
         self.is_writing = False
 
-        print("############# inserting into db")
         db.insertRecording(
             db_conn, filename, now, latestTimestamp - firstTimestamp, nextDayId
         )
 
-        print("############# insert done")
         db_conn.close()
-        print("############# db conn closed")
 
         # print("duration: ", latestTimestamp - firstTimestamp)
         # print("number of samples: ", totalSampleCount)
@@ -403,3 +399,8 @@ class Detector:
         # print("first timestamp: ", firstTimestamp)
         # print("last timestamp: ", latestTimestamp)
         # print("barking stopped at: ", barking_stopped_at)
+
+    def dbInsertBark(self, timestamp: datetime.datetime):
+        dbConn = sqlite3.connect(db.dbname)
+        db.insertBark(dbConn, timestamp)
+        dbConn.close()

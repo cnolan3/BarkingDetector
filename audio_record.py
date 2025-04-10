@@ -15,7 +15,7 @@
 
 import queue
 import threading
-import time
+import datetime
 import numpy as np
 
 try:
@@ -68,7 +68,7 @@ class AudioRecord(object):
         def audio_callback(data, *_):
             """A callback to receive recorded audio data from sounddevice."""
             self._lock.acquire()
-            timestamp = time.time()
+            timestamp = datetime.datetime.now()
             shift = len(data)
             if shift > buffer_size:
                 self._buffer = np.copy(data[:buffer_size])

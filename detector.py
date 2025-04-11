@@ -24,6 +24,7 @@ from utils import (
     readSettings,
     Settings,
     maxTimestamp,
+    updateSetting,
 )
 from message import (
     MsgAttr,
@@ -51,21 +52,17 @@ class Detector:
     audio_format: containers.AudioDataFormat
     record: audio_record.AudioRecord
     audio_data: containers.AudioData
-    buffer_size, sample_rate, num_channels, sample_width = 15600, 16000, 1, 4
-    listening_q_time = 3  # listening buffer length in seconds
     listening_q_size: int
     runLoop: bool
     is_recording: bool
     recording_q: queue.Queue
-    recording_timeout = 10
-    record_threshold = 0.15
     barking_stopped_at_q: queue.Queue
     is_writing: bool
-    write_buffer_length = 3
-    file_write_path = ""
     bufferSum: int
+    settings: {}
 
     def __init__(self, model: str, msgHandler: MsgHandler):
+        self.settings = {}
         self.loadSettings()
         self.msgHandler = msgHandler
         self.recording_q = queue.Queue()
@@ -94,13 +91,17 @@ class Detector:
         # The sample rate may need to be changed to match your input device.
         # For example, an AT2020 requires sample_rate 44100.
         self.audio_format = containers.AudioDataFormat(
-            self.num_channels, self.sample_rate
+            self.settings[Settings.NUM_CHANNELS], self.settings[Settings.SAMPLE_RATE]
         )
         self.record = audio_record.AudioRecord(
-            self.num_channels, self.sample_rate, self.buffer_size
+            self.settings[Settings.NUM_CHANNELS],
+            self.settings[Settings.SAMPLE_RATE],
+            self.settings[Settings.REC_BUFFER_SIZE],
         )
 
-        self.audio_data = containers.AudioData(self.buffer_size, self.audio_format)
+        self.audio_data = containers.AudioData(
+            self.settings[Settings.REC_BUFFER_SIZE], self.audio_format
+        )
 
         # We'll try to run inference every interval_between_inference seconds.
         # This is usually half of the model's input length to create an overlapping
@@ -111,7 +112,10 @@ class Detector:
         )
         self.interval_between_inference = input_length_in_second * (0.5)
 
-        self.listening_q_size = self.sample_rate * self.listening_q_time
+        self.listening_q_size = (
+            self.settings[Settings.SAMPLE_RATE]
+            * self.settings[Settings.PRE_BUFFER_TIME]
+        )
 
         self.runLoop = True
 
@@ -120,34 +124,34 @@ class Detector:
         self.classification_result_list.append(result)
 
     def loadSettings(self):
-        settings = readSettings()
+        loadedSettings = readSettings()
 
-        if settings:
+        if loadedSettings:
             for attr in Settings:
-                if attr.value not in settings:
-                    return  # settings file not valid
+                # if attr.value not in loadedSettings:
+                #     return  # settings file not valid
 
-            self.record_threshold = settings[Settings.BARK_THRESHOLD.value]
-            self.recording_timeout = settings[Settings.REC_TIMEOUT.value]
-            self.listening_q_time = settings[Settings.PRE_BUFFER_TIME.value]
-            self.buffer_size = settings[Settings.REC_BUFFER_SIZE.value]
-            self.sample_rate = settings[Settings.SAMPLE_RATE.value]
-            self.num_channels = settings[Settings.NUM_CHANNELS.value]
-            self.write_buffer_length = settings[Settings.WRITE_BUFFER_LENGTH.value]
-            self.file_write_path = settings[Settings.RECORDING_FILE_PATH.value]
+                self.settings[attr] = loadedSettings[attr.value]
 
-        if self.file_write_path != "" and not Path(self.file_write_path).is_dir():
+        if (
+            self.settings[Settings.RECORDING_FILE_PATH] != ""
+            and not Path(self.settings[Settings.RECORDING_FILE_PATH]).is_dir()
+        ):
             # TODO raise an exception or something
             print(
                 "{} is not a valid path, resorting to default".format(
-                    self.file_write_path
+                    self.settings[Settings.RECORDING_FILE_PATH]
                 )
             )
-            self.file_write_path = ""
+            self.settings[Settings.RECORDING_FILE_PATH] = ""
 
-        if self.file_write_path == "":
-            self.file_write_path = os.path.join(os.getcwd(), "recordings/")
-            Path(self.file_write_path).mkdir(parents=True, exist_ok=True)
+        if self.settings[Settings.RECORDING_FILE_PATH] == "":
+            self.settings[Settings.RECORDING_FILE_PATH] = os.path.join(
+                os.getcwd(), "recordings/"
+            )
+            Path(self.settings[Settings.RECORDING_FILE_PATH]).mkdir(
+                parents=True, exist_ok=True
+            )
 
     def run(self):
         filteredListLock = threading.Lock()
@@ -202,7 +206,39 @@ class Detector:
                         self.msgHandler.send(resp)
                     filteredListLock.release()
                 elif cmdMsg.checkCmd(MsgCmd.UPDATE_SETTING):
-                    continue  # TODO
+                    data = cmdMsg.getData()
+                    if data is str:
+                        resp = (
+                            Message()
+                            .setMsgType(MsgType.RESPONSE)
+                            .setRespType(MsgRespType.STATUS)
+                            .setStatus(MsgStatus.ERROR)
+                            .setData("Setting request format invalid")
+                        )
+                        self.msgHandler.send(resp)
+                        continue
+                    for key, value in data.items():
+                        for setting in Settings:
+                            if key == setting.value:
+                                self.settings[setting] = value
+                                updateSetting(setting, value)
+                    resp = (
+                        Message()
+                        .setMsgType(MsgType.RESPONSE)
+                        .setRespType(MsgRespType.STATUS)
+                        .setStatus(MsgStatus.SUCCESS)
+                        .setData(self.settings)
+                    )
+                    self.msgHandler.send(resp)
+                elif cmdMsg.checkCmd(MsgCmd.GET_SETTINGS):
+                    resp = (
+                        Message()
+                        .setMsgType(MsgType.RESPONSE)
+                        .setRespType(MsgRespType.STATUS)
+                        .setStatus(MsgStatus.SUCCESS)
+                        .setData(self.settings)
+                    )
+                    self.msgHandler.send(resp)
                 elif cmdMsg.checkCmd(MsgCmd.QUIT):
                     self.runLoop = False
                     resp = (
@@ -246,7 +282,9 @@ class Detector:
             last_inference_time = now
 
             # Load the input audio from the AudioRecord instance and run classify.
-            (data, timestamp) = self.record.read_rolled_buffer(self.buffer_size)
+            (data, timestamp) = self.record.read_rolled_buffer(
+                self.settings[Settings.REC_BUFFER_SIZE]
+            )
             self.audio_data.load_from_array(data.astype(float32))
             # self.audio_data.load_from_array(data)
             self.classifier.classify_async(
@@ -261,7 +299,10 @@ class Detector:
                 filteredListLock.release()
                 self.classification_result_list.clear()
 
-                if self.filtered_list[scoreNames[0]] >= self.record_threshold:
+                if (
+                    self.filtered_list[scoreNames[0]]
+                    >= self.settings[Settings.BARK_THRESHOLD]
+                ):
                     print("dog detected")
                     insertBarkThread = threading.Thread(
                         target=self.dbInsertBark, args=(timestamp,), daemon=True
@@ -283,7 +324,7 @@ class Detector:
 
             # check if we have heard a bark within the timeout
             if self.is_recording and (
-                time.time() - last_heard_time > self.recording_timeout
+                time.time() - last_heard_time > self.settings[Settings.REC_TIMEOUT]
             ):
                 print("barking stopped")
                 barking_stopped_at = timestamp.timestamp()
@@ -327,17 +368,22 @@ class Detector:
         now = datetime.datetime.now()
         nextDayId = db.getNextDayId(db_conn)
         filename = f"{now.strftime('%b-%d-%Y_%I:%M%p')}_#{nextDayId}"
-        filepath = os.path.join(self.file_write_path, f"{filename}.wav")
+        filepath = os.path.join(
+            self.settings[Settings.RECORDING_FILE_PATH], f"{filename}.wav"
+        )
         sf = SoundFile(
             filepath,
             "w",
-            samplerate=self.sample_rate,
-            channels=self.num_channels,
+            samplerate=self.settings[Settings.SAMPLE_RATE],
+            channels=self.settings[Settings.NUM_CHANNELS],
             subtype="PCM_16",
             format="WAV",
         )
 
-        maxChunkSize = self.sample_rate * self.write_buffer_length
+        maxChunkSize = (
+            self.settings[Settings.SAMPLE_RATE]
+            * self.settings[Settings.WRITE_BUFFER_LENGTH]
+        )
         curChunkSize = 0
 
         firstTimestamp = None

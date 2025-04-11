@@ -1,7 +1,7 @@
 import multiprocessing as mp
 
 from detector import runDetector
-from flask import Flask
+from flask import Flask, request
 from message import (
     MsgAttr,
     Message,
@@ -10,6 +10,7 @@ from message import (
     MsgRespType,
     MsgStatus,
     MsgType,
+    convertSettingDict,
 )
 
 serverMsgHandler, detectorMsgHandler = createMsgHandlers()
@@ -18,7 +19,7 @@ detectorProcess = mp.Process
 app = Flask(__name__)
 
 
-@app.route("/")
+@app.route("/detectresult")
 def hello_world():
     if detectorProcess.is_alive():
         msg = Message().setMsgType(MsgType.CMD).setCmd(MsgCmd.GET_RESULT)
@@ -51,6 +52,50 @@ def quit_detector():
             return "detector successfully quit"
         else:
             return "detector quit failed"
+    else:
+        return "detector not started"
+
+
+@app.route("/detectorsetting", methods=["GET"])
+def get_detector_settings():
+    if detectorProcess.is_alive():
+        msg = Message().setMsgType(MsgType.CMD).setCmd(MsgCmd.GET_SETTINGS)
+        resp = serverMsgHandler.send(msg, True, 1)
+        print(resp)
+        if (
+            resp.hasAttr(MsgAttr.MSG_TYPE)
+            and resp.checkMsgType(MsgType.RESPONSE)
+            and resp.checkRespType(MsgRespType.STATUS)
+            and resp.checkStatus(MsgStatus.SUCCESS)
+        ):
+            return convertSettingDict(resp.getData())
+        else:
+            return "detector get settings failed"
+    else:
+        return "detector not started"
+
+
+@app.route("/detectorsetting", methods=["POST"])
+def set_detector_setting():
+    data = request.get_json()
+    if detectorProcess.is_alive():
+        msg = (
+            Message()
+            .setMsgType(MsgType.CMD)
+            .setCmd(MsgCmd.UPDATE_SETTING)
+            .setData({data.get("settingName"): data.get("settingVal")})
+        )
+        resp = serverMsgHandler.send(msg, True, 1)
+        print(resp)
+        if (
+            resp.hasAttr(MsgAttr.MSG_TYPE)
+            and resp.checkMsgType(MsgType.RESPONSE)
+            and resp.checkRespType(MsgRespType.STATUS)
+            and resp.checkStatus(MsgStatus.SUCCESS)
+        ):
+            return convertSettingDict(resp.getData())
+        else:
+            return "detector setting failed"
     else:
         return "detector not started"
 

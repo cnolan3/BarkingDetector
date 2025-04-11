@@ -24,6 +24,8 @@ class MsgRespType(Enum):
 class MsgCmd(Enum):
     GET_RESULT = "get_result"
     QUIT = "end"
+    UPDATE_SETTING = "update_setting"
+    GET_SETTINGS = "get_settings"
 
 
 class MsgStatus(Enum):
@@ -76,7 +78,7 @@ class Message(object):
         self.msg[MsgAttr.DATA.value] = data
         return self
 
-    def getData(self):
+    def getData(self) -> str | dict:
         if self.hasAttr(MsgAttr.DATA):
             return self.msg[MsgAttr.DATA.value]
 
@@ -119,6 +121,13 @@ class Message(object):
             self.msg[MsgAttr.STATUS.value] = MsgStatus.SUCCESS.value
 
         return self.msg
+
+
+def convertSettingDict(settings: dict) -> dict:
+    ret = {}
+    for key, val in settings.items():
+        ret[key.value] = val
+    return ret
 
 
 def createMsgHandlers():

@@ -101,9 +101,6 @@ def set_detector_setting():
 
 
 if __name__ == "__main__":
-    toDetector = mp.Queue()
-    fromDetector = mp.Queue()
-
     detectorProcess = mp.Process(
         target=runDetector,
         args=("yamnet.tflite", detectorMsgHandler),
@@ -112,11 +109,6 @@ if __name__ == "__main__":
     detectorProcess.start()
 
     app.run()
-
-    toDetector.close()
-    fromDetector.close()
-    # dataPipeRecv.close()
-    # dataPipeSend.close()
 
     if detectorProcess.is_alive():
         detectorProcess.terminate()

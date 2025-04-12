@@ -115,11 +115,9 @@ def chooseDevice():
     settings[Settings.REC_DEVICE_ID.value] = devId
     updateSetting(Settings.REC_DEVICE_ID, devId)
 
-    sampleRate = deviceList[devId]["default_samplerate"]
+    sampleRate = math.trunc(deviceList[devId]["default_samplerate"])
 
-    useSR = math.trunc(
-        input(f"Use selected devices default samplerate? ({sampleRate}hz) (Y/N): ")
-    )
+    useSR = input(f"Use selected devices default samplerate? ({sampleRate}hz) (Y/N): ")
 
     print(useSR)
     if useSR.upper() == "Y":

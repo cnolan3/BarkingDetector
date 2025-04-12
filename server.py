@@ -1,3 +1,4 @@
+import math
 import multiprocessing as mp
 import sounddevice as sd
 
@@ -116,7 +117,9 @@ def chooseDevice():
 
     sampleRate = deviceList[devId]["default_samplerate"]
 
-    useSR = input(f"Use selected devices default samplerate? ({sampleRate}hz) (Y/N): ")
+    useSR = math.trunc(
+        input(f"Use selected devices default samplerate? ({sampleRate}hz) (Y/N): ")
+    )
 
     print(useSR)
     if useSR.upper() == "Y":

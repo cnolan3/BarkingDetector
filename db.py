@@ -21,6 +21,7 @@ def createTables(dbConn: sqlite3.Connection):
         "CREATE TABLE if NOT EXISTS barks(\
             id  INTEGER PRIMARY KEY  NOT NULL,\
             timestamp   REAL    NOT NULL\
+            confidence  REAL    NOT NULL\
         )"
     )
 
@@ -61,10 +62,12 @@ def insertRecording(
     dbConn.commit()
 
 
-def insertBark(dbConn: sqlite3.Connection, timestamp: datetime.datetime):
+def insertBark(
+    dbConn: sqlite3.Connection, timestamp: datetime.datetime, confidence: float
+):
     cur = dbConn.cursor()
     tsseconds = timestamp.timestamp()
 
-    cur.execute(f"INSERT INTO barks (timestamp) VALUES({tsseconds})")
+    cur.execute(f"INSERT INTO barks (timestamp) VALUES({tsseconds}, {confidence})")
 
     dbConn.commit()

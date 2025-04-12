@@ -307,7 +307,12 @@ class Detector:
                 ):
                     print("dog detected")
                     insertBarkThread = threading.Thread(
-                        target=self.dbInsertBark, args=(timestamp,), daemon=True
+                        target=self.dbInsertBark,
+                        args=(
+                            timestamp,
+                            self.filtered_list[scoreNames[0]],
+                        ),
+                        daemon=True,
                     )
                     insertBarkThread.start()
                     last_heard_time = timestamp.timestamp()
@@ -448,7 +453,7 @@ class Detector:
         # print("last timestamp: ", latestTimestamp)
         # print("barking stopped at: ", barking_stopped_at)
 
-    def dbInsertBark(self, timestamp: datetime.datetime):
+    def dbInsertBark(self, timestamp: datetime.datetime, confidence: float):
         dbConn = sqlite3.connect(db.dbname)
-        db.insertBark(dbConn, timestamp)
+        db.insertBark(dbConn, timestamp, confidence)
         dbConn.close()

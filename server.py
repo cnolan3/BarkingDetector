@@ -1,7 +1,9 @@
 import multiprocessing as mp
+import sounddevice as sd
 
 from detector import runDetector
 from flask import Flask, request
+from utils import checkSettingsFile, readSettings, updateSetting, Settings
 from message import (
     MsgAttr,
     Message,
@@ -100,7 +102,33 @@ def set_detector_setting():
         return "detector not started"
 
 
+def chooseDevice():
+    settings = readSettings()
+    if settings[Settings.REC_DEVICE_ID.value] != -1:
+        return
+
+    deviceList = sd.query_devices()
+    print("### Select a recording device to use as a microphone ###")
+    print(deviceList)
+    devId = int(input("device id: "))
+    settings[Settings.REC_DEVICE_ID.value] = devId
+    updateSetting(Settings.REC_DEVICE_ID, devId)
+
+    sampleRate = deviceList[devId]["default_samplerate"]
+
+    useSR = input(f"Use selected devices default samplerate? ({sampleRate}hz) (Y/N): ")
+
+    print(useSR)
+    if useSR.upper() == "Y":
+        print("AAA")
+        settings[Settings.SAMPLE_RATE.value] = sampleRate
+        updateSetting(Settings.SAMPLE_RATE, sampleRate)
+
+
 if __name__ == "__main__":
+    checkSettingsFile()
+    chooseDevice()
+
     detectorProcess = mp.Process(
         target=runDetector,
         args=("yamnet.tflite", detectorMsgHandler),

@@ -31,7 +31,9 @@ except ImportError as ie:
 class AudioRecord(object):
     """A class to record audio in a streaming basis."""
 
-    def __init__(self, channels: int, sampling_rate: int, buffer_size: int) -> None:
+    def __init__(
+        self, channels: int, sampling_rate: int, buffer_size: int, device_id: int
+    ) -> None:
         """Creates an AudioRecord instance.
 
         Args:
@@ -83,6 +85,7 @@ class AudioRecord(object):
 
         # Create an input stream to continuously capture the audio data.
         self._stream = sd.InputStream(
+            device=device_id,
             channels=channels,
             samplerate=sampling_rate,
             callback=audio_callback,

@@ -11,6 +11,7 @@ import db
 
 from numpy import float32
 import audio_record
+import sounddevice as sd
 
 from pathlib import Path
 from soundfile import SoundFile
@@ -97,6 +98,7 @@ class Detector:
             self.settings[Settings.NUM_CHANNELS],
             self.settings[Settings.SAMPLE_RATE],
             self.settings[Settings.REC_BUFFER_SIZE],
+            self.settings[Settings.REC_DEVICE_ID],
         )
 
         self.audio_data = containers.AudioData(

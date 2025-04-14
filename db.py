@@ -20,7 +20,7 @@ def createTables(dbConn: sqlite3.Connection):
     cur.execute(
         "CREATE TABLE if NOT EXISTS barks(\
             id  INTEGER PRIMARY KEY  NOT NULL,\
-            timestamp   REAL    NOT NULL\
+            timestamp   REAL    NOT NULL,\
             confidence  REAL    NOT NULL\
         )"
     )
@@ -68,6 +68,8 @@ def insertBark(
     cur = dbConn.cursor()
     tsseconds = timestamp.timestamp()
 
-    cur.execute(f"INSERT INTO barks (timestamp) VALUES({tsseconds}, {confidence})")
+    cur.execute(
+        f"INSERT INTO barks (timestamp, confidence) VALUES({tsseconds}, {confidence})"
+    )
 
     dbConn.commit()

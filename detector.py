@@ -11,7 +11,6 @@ import db
 
 from numpy import float32
 import audio_record
-import sounddevice as sd
 
 from pathlib import Path
 from soundfile import SoundFile
@@ -267,6 +266,7 @@ class Detector:
         fileWriteThread: threading.Thread
         barking_started_at: int
         barking_stopped_at: int
+        fake_timestamp = time.time()
 
         # wait for recording thread to flush the recorder
         recordingBarrier.wait()
@@ -289,8 +289,9 @@ class Detector:
             )
             self.audio_data.load_from_array(data.astype(float32))
             # self.audio_data.load_from_array(data)
+            fake_timestamp += data.shape[0] / self.settings[Settings.SAMPLE_RATE]
             self.classifier.classify_async(
-                self.audio_data, round(last_inference_time * 1000)
+                self.audio_data, round(fake_timestamp * 1000)
             )
 
             # filter the classification result

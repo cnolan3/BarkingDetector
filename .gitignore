@@ -2,6 +2,7 @@
 .direnv/
 __pycache__/
 recordings/
+recording_backups/
 *.db
 *.tflite
 *.wav
